@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   SandpackProvider,
   SandpackPreview,
@@ -9,6 +9,7 @@ import {
   useSandpack,
 } from '@codesandbox/sandpack-react';
 import { ViewportMode, ViewMode } from '@/lib/types';
+import { Code, MessageSquare, GripVertical } from 'lucide-react';
 import {
   SANDPACK_THEME,
   SANDPACK_CUSTOM_SETUP,
@@ -21,6 +22,10 @@ interface PreviewPaneProps {
   viewport: ViewportMode;
   viewMode: ViewMode;
   onErrorDetected: (error: string | null) => void;
+  isMobile?: boolean;
+  onSwitchToPrompt?: () => void;
+  runTrigger?: number;
+  onReadyChange?: (isReady: boolean) => void;
 }
 
 // Internal watcher inside SandpackProvider to monitor compilation errors and two-way code sync
@@ -28,10 +33,14 @@ function SandpackWatcher({
   code,
   onErrorDetected,
   onCodeChange,
+  runTrigger,
+  onReadyChange,
 }: {
   code: string;
   onErrorDetected: (error: string | null) => void;
   onCodeChange: (code: string) => void;
+  runTrigger?: number;
+  onReadyChange?: (isReady: boolean) => void;
 }) {
   const { sandpack } = useSandpack();
   const errorMessage = useErrorMessage();
@@ -63,6 +72,27 @@ function SandpackWatcher({
     }
   }, [sandpackCode, code, onCodeChange]);
 
+  // Trigger manual code execution when Run button is pressed
+  useEffect(() => {
+    if (runTrigger && runTrigger > 0) {
+      sandpack.runSandpack();
+      const currentFileCode = sandpack.files['/App.js']?.code;
+      if (currentFileCode) {
+        sandpack.updateFile('/App.js', currentFileCode, true);
+      }
+    }
+  }, [runTrigger, sandpack]);
+
+  // Sync readiness state to parent
+  useEffect(() => {
+    const hasClient = Object.keys(sandpack.clients || {}).length > 0;
+    const isReady = (sandpack.status === 'idle' || sandpack.status === 'done') && hasClient;
+    onReadyChange?.(isReady);
+    return () => {
+      onReadyChange?.(false);
+    };
+  }, [sandpack.status, sandpack.clients, onReadyChange]);
+
   return null;
 }
 
@@ -72,12 +102,63 @@ export default function PreviewPane({
   viewport,
   viewMode,
   onErrorDetected,
+  isMobile = false,
+  onSwitchToPrompt,
+  runTrigger,
+  onReadyChange,
 }: PreviewPaneProps) {
   // Build Sandpack virtual file map
   const files = {
     '/App.js': code,
     '/public/index.html': SANDPACK_INDEX_HTML,
   };
+
+  const [splitRatio, setSplitRatio] = useState<number>(50);
+  const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
+  const splitContainerRef = useRef<HTMLDivElement>(null);
+
+  // Restore saved split ratio
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('forma_split_ratio');
+      if (saved) {
+        const val = parseFloat(saved);
+        if (!isNaN(val) && val >= 15 && val <= 85) {
+          setSplitRatio(val);
+        }
+      }
+    }
+  }, []);
+
+  // Split resize handlers
+  const handleSplitResizeStart = (e: React.PointerEvent) => {
+    e.preventDefault();
+    setIsDraggingSplit(true);
+  };
+
+  useEffect(() => {
+    if (!isDraggingSplit) return;
+
+    const handlePointerMove = (e: PointerEvent) => {
+      if (!splitContainerRef.current) return;
+      const rect = splitContainerRef.current.getBoundingClientRect();
+      const raw = ((e.clientX - rect.left) / rect.width) * 100;
+      const clamped = Math.max(18, Math.min(82, raw));
+      setSplitRatio(clamped);
+    };
+
+    const handlePointerUp = () => {
+      setIsDraggingSplit(false);
+      localStorage.setItem('forma_split_ratio', splitRatio.toString());
+    };
+
+    window.addEventListener('pointermove', handlePointerMove);
+    window.addEventListener('pointerup', handlePointerUp);
+    return () => {
+      window.removeEventListener('pointermove', handlePointerMove);
+      window.removeEventListener('pointerup', handlePointerUp);
+    };
+  }, [isDraggingSplit, splitRatio]);
 
   return (
     <div className="relative flex-1 min-h-0 h-full w-full bg-zinc-950 overflow-hidden flex flex-col">
@@ -99,101 +180,135 @@ export default function PreviewPane({
           code={code}
           onErrorDetected={onErrorDetected}
           onCodeChange={onCodeChange}
+          runTrigger={runTrigger}
+          onReadyChange={onReadyChange}
         />
 
-        <div className="flex-1 min-h-0 w-full h-full overflow-hidden flex">
-          {/* Split Mode: Code on Left */}
+        <div
+          ref={splitContainerRef}
+          className="flex-1 min-h-0 w-full h-full overflow-hidden flex relative"
+        >
+          {/* Transparent overlay while dragging to prevent iframe stealing pointer events */}
+          {isDraggingSplit && (
+            <div className="fixed inset-0 z-50 cursor-col-resize select-none" />
+          )}
+
+          {/* Code Editor (Active in Split or Code View) */}
+          {(viewMode === 'code' || viewMode === 'split') && (
+            <div
+              style={viewMode === 'split' ? { width: `${splitRatio}%` } : { width: '100%' }}
+              className="min-h-0 h-full flex flex-col bg-zinc-950 shrink-0"
+            >
+              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <Code className="w-3.5 h-3.5 text-indigo-400" />
+                  <span>App.tsx (Source)</span>
+                </div>
+                <span className="text-[10px] text-zinc-500">Live Editable</span>
+              </div>
+              <div className="flex-1 min-h-0 h-full relative overflow-hidden flex flex-col">
+                <SandpackCodeEditor
+                  showLineNumbers
+                  showInlineErrors
+                  wrapContent={false}
+                  style={{ height: '100%', width: '100%' }}
+                />
+              </div>
+            </div>
+          )}
+
+          {/* Split Mode Resizer Divider */}
           {viewMode === 'split' && (
-            <div className="w-1/2 min-h-0 h-full border-r border-zinc-800/80 flex flex-col bg-zinc-950">
-              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 shrink-0">
-                <span>App.tsx (Source)</span>
-                <span className="text-[10px] text-zinc-500">Live Editable & Scrollable</span>
+            <div
+              onPointerDown={handleSplitResizeStart}
+              onDoubleClick={() => {
+                setSplitRatio(50);
+                localStorage.setItem('forma_split_ratio', '50');
+              }}
+              className={`w-2.5 -mx-1 relative z-20 cursor-col-resize group flex items-center justify-center shrink-0 select-none transition-colors ${
+                isDraggingSplit ? 'bg-indigo-600/30' : 'hover:bg-indigo-500/20'
+              }`}
+              title="Drag to resize Code vs Preview • Double-click to reset (50/50)"
+            >
+              {/* Divider visible line */}
+              <div className="w-[1px] h-full bg-zinc-800 group-hover:bg-indigo-500/50 transition-colors" />
+
+              {/* Drag Handle Grip Pill */}
+              <div
+                className={`absolute top-1/2 -translate-y-1/2 w-1.5 h-10 rounded-full flex items-center justify-center transition-all ${
+                  isDraggingSplit ? 'bg-indigo-500 scale-125' : 'bg-zinc-700 group-hover:bg-indigo-400'
+                }`}
+              >
+                <GripVertical className="w-3 h-3 text-zinc-950 opacity-0 group-hover:opacity-100 transition-opacity" />
               </div>
-              <div className="flex-1 min-h-0 h-full relative overflow-hidden flex flex-col">
-                <SandpackCodeEditor
-                  showLineNumbers
-                  showInlineErrors
-                  wrapContent={false}
-                  style={{ height: '100%', width: '100%' }}
-                />
-              </div>
+
+              {/* Floating ratio tooltip badge while dragging */}
+              {isDraggingSplit && (
+                <div className="absolute top-10 z-30 px-2 py-1 rounded bg-zinc-900 border border-zinc-700 text-[10px] font-mono text-zinc-200 shadow-xl whitespace-nowrap pointer-events-none">
+                  {Math.round(splitRatio)}% / {Math.round(100 - splitRatio)}%
+                </div>
+              )}
             </div>
           )}
 
-          {/* Full Code Mode */}
-          {viewMode === 'code' && (
-            <div className="w-full min-h-0 h-full flex flex-col bg-zinc-950">
-              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 shrink-0">
-                <span>App.tsx (Source)</span>
-                <span className="text-[10px] text-zinc-500">Live Editable & Scrollable</span>
-              </div>
-              <div className="flex-1 min-h-0 h-full relative overflow-hidden flex flex-col">
-                <SandpackCodeEditor
-                  showLineNumbers
-                  showInlineErrors
-                  wrapContent={false}
-                  style={{ height: '100%', width: '100%' }}
-                />
-              </div>
-            </div>
-          )}
-
-          {/* Preview View (Desktop, Tablet, or Mobile) */}
+          {/* Preview View (Active in Preview or Split View) */}
           {(viewMode === 'preview' || viewMode === 'split') && (
             <div
-              className={`flex-1 min-h-0 h-full flex items-center justify-center p-2 sm:p-4 bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:16px_16px] overflow-auto ${
-                viewMode === 'split' ? 'w-1/2' : 'w-full'
-              }`}
+              style={viewMode === 'split' ? { width: `${100 - splitRatio}%` } : { width: '100%' }}
+              className="flex-1 min-h-0 h-full flex items-center justify-center p-0 sm:p-2 lg:p-4 bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:16px_16px] overflow-auto relative shrink-0"
             >
-              {/* Desktop Viewport */}
-              {viewport === 'desktop' && (
-                <div className="w-full h-full rounded-xl overflow-hidden border border-zinc-800 bg-zinc-950 shadow-2xl flex flex-col">
+              {/* Responsive Container Frame */}
+              <div
+                className={`flex flex-col transition-all duration-300 relative overflow-hidden bg-zinc-950 shadow-2xl ${
+                  isMobile || viewport === 'desktop'
+                    ? 'w-full h-full rounded-none sm:rounded-xl border-0 sm:border border-zinc-800'
+                    : viewport === 'tablet'
+                    ? 'w-[768px] max-w-full h-[95%] max-h-[1024px] rounded-2xl border-[10px] border-zinc-800 ring-1 ring-zinc-700'
+                    : 'w-[390px] max-w-full h-[820px] max-h-[96%] rounded-[48px] border-[12px] border-zinc-800 ring-2 ring-zinc-700/60'
+                }`}
+              >
+                {/* Simulated Tablet Top Bezel Camera */}
+                {!isMobile && viewport === 'tablet' && (
+                  <div className="h-4 bg-zinc-800 flex items-center justify-center shrink-0">
+                    <div className="w-2 h-2 rounded-full bg-zinc-900 ring-1 ring-zinc-700" />
+                  </div>
+                )}
+
+                {/* Simulated iPhone Dynamic Island Bezel */}
+                {!isMobile && viewport === 'mobile' && (
+                  <div className="h-7 bg-zinc-950 w-full flex items-center justify-center pt-1 z-20 shrink-0">
+                    <div className="w-24 h-4 bg-zinc-900 rounded-full flex items-center justify-end pr-2 ring-1 ring-zinc-800">
+                      <div className="w-2 h-2 rounded-full bg-zinc-950 ring-1 ring-zinc-800" />
+                    </div>
+                  </div>
+                )}
+
+                {/* Sandpack Preview Container */}
+                <div className="flex-1 w-full h-full min-h-0 overflow-hidden flex flex-col">
                   <SandpackPreview
                     showOpenInCodeSandbox={false}
                     showRefreshButton={true}
                     style={{ height: '100%', width: '100%' }}
                   />
                 </div>
-              )}
 
-              {/* Tablet Viewport (768px frame) */}
-              {viewport === 'tablet' && (
-                <div className="w-[768px] max-w-full h-[95%] max-h-[1024px] rounded-2xl border-[10px] border-zinc-800 bg-zinc-950 shadow-2xl flex flex-col relative overflow-hidden ring-1 ring-zinc-700">
-                  {/* Tablet Top Bezel Camera */}
-                  <div className="h-4 bg-zinc-800 flex items-center justify-center shrink-0">
-                    <div className="w-2 h-2 rounded-full bg-zinc-900 ring-1 ring-zinc-700" />
-                  </div>
-                  <div className="flex-1 w-full overflow-hidden">
-                    <SandpackPreview
-                      showOpenInCodeSandbox={false}
-                      showRefreshButton={true}
-                      style={{ height: '100%', width: '100%' }}
-                    />
-                  </div>
-                </div>
-              )}
-
-              {/* Mobile Viewport (390px iPhone-style frame) */}
-              {viewport === 'mobile' && (
-                <div className="w-[390px] max-w-full h-[820px] max-h-[96%] rounded-[48px] border-[12px] border-zinc-800 bg-zinc-950 shadow-2xl flex flex-col relative overflow-hidden ring-2 ring-zinc-700/60">
-                  {/* iPhone Dynamic Island Bezel */}
-                  <div className="h-7 bg-zinc-950 w-full flex items-center justify-center pt-1 z-20 shrink-0">
-                    <div className="w-24 h-4 bg-zinc-900 rounded-full flex items-center justify-end pr-2 ring-1 ring-zinc-800">
-                      <div className="w-2 h-2 rounded-full bg-zinc-950 ring-1 ring-zinc-800" />
-                    </div>
-                  </div>
-                  <div className="flex-1 w-full overflow-hidden">
-                    <SandpackPreview
-                      showOpenInCodeSandbox={false}
-                      showRefreshButton={true}
-                      style={{ height: '100%', width: '100%' }}
-                    />
-                  </div>
-                  {/* Home indicator bar */}
+                {/* Simulated iPhone Home Indicator Bar */}
+                {!isMobile && viewport === 'mobile' && (
                   <div className="h-4 bg-zinc-950 w-full flex items-center justify-center shrink-0">
                     <div className="w-32 h-1 bg-zinc-700 rounded-full" />
                   </div>
-                </div>
+                )}
+              </div>
+
+              {/* Mobile Floating Quick Action Button */}
+              {isMobile && onSwitchToPrompt && (
+                <button
+                  onClick={onSwitchToPrompt}
+                  className="absolute bottom-4 right-4 z-30 px-3.5 py-2 rounded-full bg-indigo-600 hover:bg-indigo-500 active:scale-95 text-white shadow-xl shadow-indigo-600/40 flex items-center gap-1.5 text-xs font-semibold border border-indigo-400/30 transition"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  <span>Edit with AI</span>
+                </button>
               )}
             </div>
           )}

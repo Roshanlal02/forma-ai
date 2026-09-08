@@ -3,7 +3,8 @@
 import React from 'react';
 import { 
   Sparkles, Monitor, Tablet, Smartphone, Code, Eye, Columns, 
-  Key, Download, Copy, Check, RotateCcw, LayoutTemplate 
+  Key, Download, Copy, Check, RotateCcw, LayoutTemplate, MoreHorizontal,
+  PanelLeftClose, PanelLeftOpen, Play
 } from 'lucide-react';
 import { ViewportMode, ViewMode } from '@/lib/types';
 import toast from 'react-hot-toast';
@@ -18,6 +19,12 @@ interface HeaderProps {
   onReset: () => void;
   currentCode: string;
   hasCustomKey: boolean;
+  isSidebarCollapsed?: boolean;
+  onToggleSidebar?: () => void;
+  onRunCode?: () => void;
+  isRunning?: boolean;
+  isRunDisabled?: boolean;
+  runDisabledTooltip?: string;
 }
 
 export default function Header({
@@ -30,8 +37,15 @@ export default function Header({
   onReset,
   currentCode,
   hasCustomKey,
+  isSidebarCollapsed = false,
+  onToggleSidebar,
+  onRunCode,
+  isRunning = false,
+  isRunDisabled = false,
+  runDisabledTooltip,
 }: HeaderProps) {
   const [copied, setCopied] = React.useState(false);
+  const [mobileMenuOpen, setMobileMenuOpen] = React.useState(false);
 
   const handleCopy = async () => {
     try {
@@ -76,6 +90,21 @@ export default function Header({
         </div>
 
         <div className="h-4 w-px bg-zinc-800 hidden md:block" />
+
+        {/* Sidebar Collapse/Expand Toggle (Desktop) */}
+        {onToggleSidebar && (
+          <button
+            onClick={onToggleSidebar}
+            className="hidden lg:flex items-center justify-center p-1.5 rounded-lg text-zinc-400 hover:text-zinc-100 hover:bg-zinc-900 border border-transparent hover:border-zinc-800 transition"
+            title={isSidebarCollapsed ? 'Expand sidebar (Cmd+B)' : 'Collapse sidebar (Cmd+B)'}
+          >
+            {isSidebarCollapsed ? (
+              <PanelLeftOpen className="w-4 h-4 text-indigo-400" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
+          </button>
+        )}
 
         {/* Templates Gallery Button */}
         <button
@@ -159,59 +188,124 @@ export default function Header({
       </div>
 
       {/* Right: Actions, API Key, Export */}
-      <div className="flex items-center gap-2">
+      <div className="flex items-center gap-1.5 sm:gap-2 relative">
+        {/* Run Code Output Button */}
+        {onRunCode && (
+          <button
+            onClick={isRunDisabled ? undefined : onRunCode}
+            disabled={isRunDisabled || isRunning}
+            className={`inline-flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-semibold transition select-none ${
+              isRunDisabled
+                ? 'bg-zinc-900 border border-zinc-800 text-zinc-500 cursor-not-allowed opacity-60'
+                : isRunning
+                ? 'bg-emerald-700 text-white cursor-wait opacity-90 shadow-md shadow-emerald-700/20'
+                : 'bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 active:scale-95 text-white shadow-md shadow-emerald-600/25'
+            }`}
+            title={runDisabledTooltip || (isRunning ? 'Running...' : 'Run code output (Ctrl+Enter)')}
+          >
+            <Play className={`w-3.5 h-3.5 fill-current ${isRunning ? 'animate-spin' : ''}`} />
+            <span className="font-semibold">{isRunning ? 'Running...' : 'Run'}</span>
+          </button>
+        )}
+
         {/* Templates on small screens */}
         <button
           onClick={onOpenTemplatesModal}
-          className="md:hidden p-1.5 rounded-lg bg-zinc-900 border border-zinc-800 text-zinc-300"
-          title="Templates"
+          className="md:hidden flex items-center gap-1 px-2 py-1.5 rounded-lg bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 text-xs font-medium text-zinc-300 transition"
+          title="Browse Templates"
         >
-          <LayoutTemplate className="w-4 h-4 text-indigo-400" />
+          <LayoutTemplate className="w-3.5 h-3.5 text-indigo-400" />
+          <span className="hidden min-[420px]:inline text-[11px]">Templates</span>
         </button>
 
         {/* API Key Modal Trigger */}
         <button
           onClick={onOpenApiKeyModal}
-          className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition ${
+          className={`inline-flex items-center gap-1.5 px-2 sm:px-2.5 py-1.5 rounded-lg text-xs font-medium border transition ${
             hasCustomKey
               ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:bg-emerald-500/20'
               : 'bg-zinc-900 text-amber-400 border-amber-500/30 hover:bg-zinc-800'
           }`}
           title="Configure API Key"
         >
-          <Key className="w-3.5 h-3.5" />
+          <Key className="w-3.5 h-3.5 shrink-0" />
           <span className="hidden sm:inline">
             {hasCustomKey ? 'Key Connected' : 'Set API Key'}
           </span>
-          <span className={`w-1.5 h-1.5 rounded-full ${hasCustomKey ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
+          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${hasCustomKey ? 'bg-emerald-400' : 'bg-amber-400 animate-pulse'}`} />
         </button>
 
-        {/* Reset */}
-        <button
-          onClick={onReset}
-          className="p-1.5 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition"
-          title="Reset to Initial Screen"
-        >
-          <RotateCcw className="w-4 h-4" />
-        </button>
-
-        {/* Copy Code */}
+        {/* Copy Code (Always visible on all screens as top utility) */}
         <button
           onClick={handleCopy}
-          className="p-1.5 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition"
+          className="p-1.5 sm:p-2 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition"
           title="Copy Code"
         >
           {copied ? <Check className="w-4 h-4 text-emerald-400" /> : <Copy className="w-4 h-4" />}
         </button>
 
-        {/* Download Code */}
-        <button
-          onClick={handleDownload}
-          className="p-1.5 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition"
-          title="Download App.tsx"
-        >
-          <Download className="w-4 h-4" />
-        </button>
+        {/* Desktop / Tablet Buttons (hidden on < sm) */}
+        <div className="hidden sm:flex items-center gap-1.5">
+          {/* Reset */}
+          <button
+            onClick={onReset}
+            className="p-2 rounded-lg text-zinc-400 hover:text-white hover:bg-zinc-800 border border-transparent hover:border-zinc-700 transition"
+            title="Reset to Initial Screen"
+          >
+            <RotateCcw className="w-4 h-4" />
+          </button>
+
+          {/* Download Code */}
+          <button
+            onClick={handleDownload}
+            className="p-2 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition"
+            title="Download App.tsx"
+          >
+            <Download className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Mobile Overflow Menu (< sm screens) */}
+        <div className="sm:hidden relative">
+          <button
+            onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+            className="p-1.5 rounded-lg text-zinc-300 hover:text-white bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition"
+            title="More Options"
+          >
+            <MoreHorizontal className="w-4 h-4" />
+          </button>
+
+          {mobileMenuOpen && (
+            <>
+              <div 
+                className="fixed inset-0 z-40" 
+                onClick={() => setMobileMenuOpen(false)} 
+              />
+              <div className="absolute right-0 mt-2 w-48 bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-1.5 z-50 space-y-1 text-xs text-zinc-200">
+                <button
+                  onClick={() => {
+                    handleDownload();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-800 transition text-left"
+                >
+                  <Download className="w-4 h-4 text-zinc-400" />
+                  <span>Download App.tsx</span>
+                </button>
+                <button
+                  onClick={() => {
+                    onReset();
+                    setMobileMenuOpen(false);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg hover:bg-zinc-800 text-rose-400 transition text-left"
+                >
+                  <RotateCcw className="w-4 h-4" />
+                  <span>Reset Sandbox</span>
+                </button>
+              </div>
+            </>
+          )}
+        </div>
       </div>
     </header>
   );
