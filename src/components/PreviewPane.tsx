@@ -1,12 +1,12 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
 import {
   SandpackProvider,
   SandpackPreview,
   SandpackCodeEditor,
   useErrorMessage,
-  useActiveCode,
+  useSandpack,
 } from '@codesandbox/sandpack-react';
 import { ViewportMode, ViewMode } from '@/lib/types';
 import {
@@ -23,26 +23,45 @@ interface PreviewPaneProps {
   onErrorDetected: (error: string | null) => void;
 }
 
-// Internal watcher inside SandpackProvider to monitor compilation errors and code changes
+// Internal watcher inside SandpackProvider to monitor compilation errors and two-way code sync
 function SandpackWatcher({
+  code,
   onErrorDetected,
   onCodeChange,
 }: {
+  code: string;
   onErrorDetected: (error: string | null) => void;
   onCodeChange: (code: string) => void;
 }) {
+  const { sandpack } = useSandpack();
   const errorMessage = useErrorMessage();
-  const { code } = useActiveCode();
+  const isUpdatingFromProp = useRef(false);
 
+  // Sync compilation/runtime error to parent
   useEffect(() => {
     onErrorDetected(errorMessage || null);
   }, [errorMessage, onErrorDetected]);
 
+  // When external `code` prop changes (from streaming or template), update Sandpack internal file
   useEffect(() => {
-    if (code) {
-      onCodeChange(code);
+    const currentSandpackCode = sandpack.files['/App.js']?.code;
+    if (code && code !== currentSandpackCode) {
+      isUpdatingFromProp.current = true;
+      sandpack.updateFile('/App.js', code, true);
+      const timer = setTimeout(() => {
+        isUpdatingFromProp.current = false;
+      }, 100);
+      return () => clearTimeout(timer);
     }
-  }, [code, onCodeChange]);
+  }, [code, sandpack]);
+
+  // When user edits inside Sandpack code editor, sync back to parent
+  const sandpackCode = sandpack.files['/App.js']?.code;
+  useEffect(() => {
+    if (!isUpdatingFromProp.current && sandpackCode && sandpackCode !== code) {
+      onCodeChange(sandpackCode);
+    }
+  }, [sandpackCode, code, onCodeChange]);
 
   return null;
 }
@@ -61,36 +80,41 @@ export default function PreviewPane({
   };
 
   return (
-    <div className="relative flex-1 h-full bg-zinc-950 overflow-hidden flex flex-col">
+    <div className="relative flex-1 min-h-0 h-full w-full bg-zinc-950 overflow-hidden flex flex-col">
       <SandpackProvider
         template="react"
         theme={SANDPACK_THEME}
         customSetup={SANDPACK_CUSTOM_SETUP}
         files={files}
+        className="h-full w-full flex flex-col flex-1 min-h-0"
+        style={{ height: '100%', width: '100%' }}
         options={{
+          activeFile: '/App.js',
+          visibleFiles: ['/App.js'],
           recompileMode: 'delayed',
-          recompileDelay: 300,
+          recompileDelay: 250,
         }}
       >
         <SandpackWatcher
+          code={code}
           onErrorDetected={onErrorDetected}
           onCodeChange={onCodeChange}
         />
 
-        <div className="flex-1 w-full h-full overflow-hidden flex">
+        <div className="flex-1 min-h-0 w-full h-full overflow-hidden flex">
           {/* Split Mode: Code on Left */}
           {viewMode === 'split' && (
-            <div className="w-1/2 h-full border-r border-zinc-800/80 flex flex-col bg-zinc-950">
-              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+            <div className="w-1/2 min-h-0 h-full border-r border-zinc-800/80 flex flex-col bg-zinc-950">
+              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 shrink-0">
                 <span>App.tsx (Source)</span>
-                <span className="text-[10px] text-zinc-500">Live Editable</span>
+                <span className="text-[10px] text-zinc-500">Live Editable & Scrollable</span>
               </div>
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 min-h-0 h-full relative overflow-hidden flex flex-col">
                 <SandpackCodeEditor
                   showLineNumbers
                   showInlineErrors
-                  wrapContent
-                  style={{ height: '100%' }}
+                  wrapContent={false}
+                  style={{ height: '100%', width: '100%' }}
                 />
               </div>
             </div>
@@ -98,17 +122,17 @@ export default function PreviewPane({
 
           {/* Full Code Mode */}
           {viewMode === 'code' && (
-            <div className="w-full h-full flex flex-col bg-zinc-950">
-              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400">
+            <div className="w-full min-h-0 h-full flex flex-col bg-zinc-950">
+              <div className="h-8 px-4 border-b border-zinc-800 bg-zinc-900/60 flex items-center justify-between text-[11px] font-mono text-zinc-400 shrink-0">
                 <span>App.tsx (Source)</span>
-                <span className="text-[10px] text-zinc-500">Live Editable</span>
+                <span className="text-[10px] text-zinc-500">Live Editable & Scrollable</span>
               </div>
-              <div className="flex-1 overflow-auto">
+              <div className="flex-1 min-h-0 h-full relative overflow-hidden flex flex-col">
                 <SandpackCodeEditor
                   showLineNumbers
                   showInlineErrors
-                  wrapContent
-                  style={{ height: '100%' }}
+                  wrapContent={false}
+                  style={{ height: '100%', width: '100%' }}
                 />
               </div>
             </div>
@@ -117,7 +141,7 @@ export default function PreviewPane({
           {/* Preview View (Desktop, Tablet, or Mobile) */}
           {(viewMode === 'preview' || viewMode === 'split') && (
             <div
-              className={`flex-1 h-full flex items-center justify-center p-2 sm:p-4 bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:16px_16px] overflow-auto ${
+              className={`flex-1 min-h-0 h-full flex items-center justify-center p-2 sm:p-4 bg-[radial-gradient(#27272a_1px,transparent_1px)] [background-size:16px_16px] overflow-auto ${
                 viewMode === 'split' ? 'w-1/2' : 'w-full'
               }`}
             >
@@ -136,7 +160,7 @@ export default function PreviewPane({
               {viewport === 'tablet' && (
                 <div className="w-[768px] max-w-full h-[95%] max-h-[1024px] rounded-2xl border-[10px] border-zinc-800 bg-zinc-950 shadow-2xl flex flex-col relative overflow-hidden ring-1 ring-zinc-700">
                   {/* Tablet Top Bezel Camera */}
-                  <div className="h-4 bg-zinc-800 flex items-center justify-center">
+                  <div className="h-4 bg-zinc-800 flex items-center justify-center shrink-0">
                     <div className="w-2 h-2 rounded-full bg-zinc-900 ring-1 ring-zinc-700" />
                   </div>
                   <div className="flex-1 w-full overflow-hidden">

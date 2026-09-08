@@ -2,7 +2,6 @@ import { streamText } from 'ai';
 import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createOpenAI } from '@ai-sdk/openai';
 
-// Explicitly mark as edge or nodejs runtime (nodejs runtime is reliable for streaming)
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
@@ -90,7 +89,6 @@ export async function POST(req: Request) {
       const openai = createOpenAI({ apiKey: openaiKey });
       languageModel = openai(model);
     } else {
-      // Default to Gemini 1.5 Flash
       if (!geminiKey) {
         return new Response(
           JSON.stringify({
@@ -108,7 +106,7 @@ export async function POST(req: Request) {
     // Build conversational context
     const messages: Array<{ role: 'user' | 'assistant'; content: string }> = [];
 
-    // Include recent history if available (limit to last 4 exchanges to keep context focused)
+    // Include recent history if available
     const recentHistory = history.slice(-6);
     for (const msg of recentHistory) {
       if (msg.role === 'user' || msg.role === 'assistant') {
@@ -134,10 +132,37 @@ export async function POST(req: Request) {
       model: languageModel,
       system: SYSTEM_PROMPT,
       messages,
-      temperature: 0.2, // low temperature for precise, deterministic code generation
+      temperature: 0.2,
     });
 
-    return result.toTextStreamResponse();
+    // Custom stream wrapper to catch and transmit provider errors directly to client
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream({
+      async start(controller) {
+        try {
+          for await (const chunk of result.textStream) {
+            controller.enqueue(encoder.encode(chunk));
+          }
+          controller.close();
+        } catch (streamErr: unknown) {
+          const err = streamErr as Error;
+          console.error('Error during AI streaming:', err);
+          const errorPayload = JSON.stringify({
+            error: 'AI_STREAM_FAILED',
+            message: err?.message || 'Error occurred while streaming response from AI provider.',
+          });
+          controller.enqueue(encoder.encode(`\n\n__STREAM_ERROR__:${errorPayload}`));
+          controller.close();
+        }
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/plain; charset=utf-8',
+        'Cache-Control': 'no-cache, no-transform',
+      },
+    });
   } catch (error: unknown) {
     const err = error as Error;
     console.error('API /api/generate error:', error);

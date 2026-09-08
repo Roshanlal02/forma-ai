@@ -3,7 +3,7 @@
  * Handles both complete and in-progress code fences (e.g. during streaming).
  */
 export function extractCodeFromStream(text: string): { code: string | null; isCodeFenceDetected: boolean } {
-  if (!text) {
+  if (!text || text.trim().length === 0) {
     return { code: null, isCodeFenceDetected: false };
   }
 
@@ -13,7 +13,7 @@ export function extractCodeFromStream(text: string): { code: string | null; isCo
 
   if (match && match[1]) {
     const rawCode = match[1].trim();
-    if (rawCode.length > 0) {
+    if (rawCode.length > 20 && (rawCode.includes('function') || rawCode.includes('const') || rawCode.includes('import'))) {
       return {
         code: rawCode,
         isCodeFenceDetected: true,
@@ -36,9 +36,21 @@ export function extractCodeFromStream(text: string): { code: string | null; isCo
  * Strips code fences from a final assistant response to display clean commentary
  * in chat bubbles while the code resides in the editor/preview.
  */
-export function extractCommentaryFromResponse(text: string): string {
-  if (!text) return '';
+export function extractCommentaryFromResponse(text: string, hasCode = false): string {
+  if (!text || text.trim().length === 0) {
+    return '';
+  }
+
   // Remove markdown code blocks
   const cleaned = text.replace(/```(?:jsx|tsx|javascript|js|react)?[\s\S]*?```/gi, '').trim();
-  return cleaned || 'Component generated successfully!';
+
+  if (cleaned.length > 0) {
+    return cleaned;
+  }
+
+  if (hasCode) {
+    return 'Component updated successfully with your requested changes.';
+  }
+
+  return text.trim();
 }

@@ -28,8 +28,8 @@ export default function StudioPage() {
   // Check if API keys exist in localStorage
   const checkKeys = useCallback(() => {
     if (typeof window !== 'undefined') {
-      const g = localStorage.getItem('forma_gemini_key');
-      const o = localStorage.getItem('forma_openai_key');
+      const g = localStorage.getItem('forma_gemini_key')?.trim();
+      const o = localStorage.getItem('forma_openai_key')?.trim();
       setHasCustomKey(Boolean(g || o));
     }
   }, []);
@@ -41,6 +41,21 @@ export default function StudioPage() {
   // Handle generation via streaming API
   const handleSendMessage = async (prompt: string, model: string) => {
     if (isGenerating) return;
+
+    // Check if user has an API key configured before starting
+    const geminiKey = typeof window !== 'undefined' ? localStorage.getItem('forma_gemini_key')?.trim() || '' : '';
+    const openaiKey = typeof window !== 'undefined' ? localStorage.getItem('forma_openai_key')?.trim() || '' : '';
+
+    if (model.startsWith('gemini') && !geminiKey) {
+      setIsApiKeyModalOpen(true);
+      toast.error('Please configure your free Gemini API key first', { duration: 4000 });
+      return;
+    }
+    if (model.startsWith('gpt') && !openaiKey) {
+      setIsApiKeyModalOpen(true);
+      toast.error('Please configure your OpenAI API key first', { duration: 4000 });
+      return;
+    }
 
     const userMessageId = Date.now().toString();
     const assistantMessageId = (Date.now() + 1).toString();
@@ -65,9 +80,6 @@ export default function StudioPage() {
     setSandpackError(null);
 
     try {
-      const geminiKey = typeof window !== 'undefined' ? localStorage.getItem('forma_gemini_key') || '' : '';
-      const openaiKey = typeof window !== 'undefined' ? localStorage.getItem('forma_openai_key') || '' : '';
-
       const response = await fetch('/api/generate', {
         method: 'POST',
         headers: {
@@ -87,21 +99,7 @@ export default function StudioPage() {
         const errorData = await response.json().catch(() => ({}));
         if (response.status === 401 && errorData.error === 'MISSING_API_KEY') {
           setIsApiKeyModalOpen(true);
-          toast.error(errorData.message || 'API Key required to generate UI', { duration: 5000 });
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === assistantMessageId
-                ? {
-                    ...m,
-                    isStreaming: false,
-                    content: 'Please configure your Gemini API Key (free from Google AI Studio) to generate components.',
-                    error: 'Missing API Key',
-                  }
-                : m
-            )
-          );
-          setIsGenerating(false);
-          return;
+          throw new Error(errorData.message || 'API Key required to generate custom components.');
         }
         throw new Error(errorData.message || `Generation failed: ${response.statusText}`);
       }
@@ -113,12 +111,27 @@ export default function StudioPage() {
       const reader = response.body.getReader();
       const decoder = new TextDecoder();
       let accumulatedText = '';
+      let streamError: string | null = null;
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
 
         const chunk = decoder.decode(value, { stream: true });
+
+        // Check if stream returned an error tag
+        if (chunk.includes('__STREAM_ERROR__:')) {
+          const parts = chunk.split('__STREAM_ERROR__:');
+          accumulatedText += parts[0];
+          try {
+            const errObj = JSON.parse(parts[1]);
+            streamError = errObj.message || 'AI provider returned an error.';
+          } catch {
+            streamError = parts[1] || 'AI provider returned an error.';
+          }
+          break;
+        }
+
         accumulatedText += chunk;
 
         // Parse code from streaming buffer
@@ -133,18 +146,27 @@ export default function StudioPage() {
             m.id === assistantMessageId
               ? {
                   ...m,
-                  content: extractCommentaryFromResponse(accumulatedText),
+                  content: extractCommentaryFromResponse(accumulatedText, Boolean(code)),
                 }
               : m
           )
         );
       }
 
+      if (streamError) {
+        throw new Error(streamError);
+      }
+
       // Final pass on stream completion
       const { code: finalCode } = extractCodeFromStream(accumulatedText);
-      if (finalCode && finalCode.length > 30) {
-        setCurrentCode(finalCode);
+      if (!finalCode || finalCode.length < 30) {
+        throw new Error(
+          accumulatedText.trim() ||
+            'AI response completed, but no valid executable React component was produced. Please retry with more specific instructions.'
+        );
       }
+
+      setCurrentCode(finalCode);
 
       setMessages((prev) =>
         prev.map((m) =>
@@ -152,8 +174,8 @@ export default function StudioPage() {
             ? {
                 ...m,
                 isStreaming: false,
-                content: extractCommentaryFromResponse(accumulatedText),
-                code: finalCode || undefined,
+                content: extractCommentaryFromResponse(accumulatedText, true),
+                code: finalCode,
               }
             : m
         )
@@ -168,15 +190,24 @@ export default function StudioPage() {
       toast.success('Component generated successfully!');
     } catch (err: unknown) {
       const error = err as Error;
-      console.error('Generation stream error:', err);
-      toast.error(error?.message || 'Error streaming component');
+      console.error('Generation stream error:', error);
+      toast.error(error?.message || 'Error generating component', { duration: 5000 });
+
+      // If key error, suggest checking API key
+      if (
+        error.message?.toLowerCase().includes('api key') ||
+        error.message?.toLowerCase().includes('apikey')
+      ) {
+        setIsApiKeyModalOpen(true);
+      }
+
       setMessages((prev) =>
         prev.map((m) =>
           m.id === assistantMessageId
             ? {
                 ...m,
                 isStreaming: false,
-                content: 'Failed to generate component. Please verify your prompt or API key.',
+                content: `Generation failed: ${error?.message || 'Please check your API key or prompt.'}`,
                 error: error?.message,
               }
             : m
@@ -196,8 +227,9 @@ export default function StudioPage() {
     const templateNotice: ChatMessage = {
       id: Date.now().toString(),
       role: 'assistant',
-      content: `Loaded starter template: **${template.title}** (${template.category}). You can now preview it, edit the code, or ask me to modify it!`,
+      content: `Loaded starter template: **${template.title}** (${template.category}). You can now preview it, scroll & edit the code, or ask me to modify it!`,
       timestamp: Date.now(),
+      code: template.code,
     };
 
     setMessages((prev) => [...prev, templateNotice]);
@@ -246,7 +278,7 @@ export default function StudioPage() {
       />
 
       {/* Main Workspace */}
-      <main className="flex-1 flex flex-col lg:flex-row overflow-hidden">
+      <main className="flex-1 min-h-0 w-full flex flex-col lg:flex-row overflow-hidden">
         {/* Left: Chat & Prompt Engineering Sidebar */}
         <PromptSidebar
           messages={messages}
