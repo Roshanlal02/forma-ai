@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import {
   SandpackProvider,
   SandpackPreview,
@@ -14,6 +14,7 @@ import {
   SANDPACK_THEME,
   SANDPACK_CUSTOM_SETUP,
   SANDPACK_INDEX_HTML,
+  SANDPACK_CSS,
 } from '@/lib/sandpack-template';
 
 interface PreviewPaneProps {
@@ -86,7 +87,7 @@ function SandpackWatcher({
   // Sync readiness state to parent
   useEffect(() => {
     const hasClient = Object.keys(sandpack.clients || {}).length > 0;
-    const isReady = (sandpack.status === 'idle' || sandpack.status === 'done') && hasClient;
+    const isReady = hasClient && (sandpack.status === 'running' || sandpack.status === 'idle');
     onReadyChange?.(isReady);
     return () => {
       onReadyChange?.(false);
@@ -108,10 +109,15 @@ export default function PreviewPane({
   onReadyChange,
 }: PreviewPaneProps) {
   // Build Sandpack virtual file map
-  const files = {
-    '/App.js': code,
-    '/public/index.html': SANDPACK_INDEX_HTML,
-  };
+  const files = useMemo(
+    () => ({
+      '/App.js': code,
+      '/styles.css': SANDPACK_CSS,
+      '/public/index.html': SANDPACK_INDEX_HTML,
+      '/index.html': SANDPACK_INDEX_HTML,
+    }),
+    [code]
+  );
 
   const [splitRatio, setSplitRatio] = useState<number>(50);
   const [isDraggingSplit, setIsDraggingSplit] = useState<boolean>(false);
@@ -174,6 +180,7 @@ export default function PreviewPane({
           visibleFiles: ['/App.js'],
           recompileMode: 'delayed',
           recompileDelay: 250,
+          externalResources: ['https://cdn.tailwindcss.com'],
         }}
       >
         <SandpackWatcher

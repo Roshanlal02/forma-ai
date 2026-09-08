@@ -120,3 +120,9 @@ body {
 .sp-code-editor::-webkit-scrollbar-thumb:hover {
   background: #3f3f46 !important;
 }
+
+/* Sandpack Loading Overlay Fix:
+   Prevent the internal .sp-loading overlay from permanently blocking the preview iframe. */
+.sp-loading {
+  display: none !important;
+}
